@@ -1,11 +1,15 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Module } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { DatabaseModule } from '../src/database/database.module';
 import { RequestIdInterceptor } from '../src/common/interceptors/request-id.interceptor';
 import { GlobalExceptionFilter } from '../src/common/filters/global-exception.filter';
 import { createGlobalValidationPipe } from '../src/common/pipes/validation.pipe';
+
+@Module({})
+class MockDatabaseModule {}
 
 describe('Notification Service E2E', () => {
   let app: INestApplication<App>;
@@ -13,7 +17,10 @@ describe('Notification Service E2E', () => {
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideModule(DatabaseModule)
+      .useModule(MockDatabaseModule)
+      .compile();
 
     app = moduleFixture.createNestApplication({ bodyParser: true });
     app.setGlobalPrefix('api/v1', {

@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
+import { DatabaseModule } from './database/database.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -13,6 +14,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
       envFilePath: ['.env', '.env.local'],
     }),
     HealthModule,
+    DatabaseModule,
   ],
   controllers: [AppController],
   providers: [
