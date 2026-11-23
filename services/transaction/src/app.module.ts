@@ -5,6 +5,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
 import { DatabaseModule } from './database/database.module';
+import { TransfersModule } from './transfers/transfers.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -15,6 +16,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     }),
     HealthModule,
     DatabaseModule,
+    TransfersModule,
   ],
   controllers: [AppController],
   providers: [

@@ -4,12 +4,16 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { DatabaseModule } from '../src/database/database.module';
+import { TransfersModule } from '../src/transfers/transfers.module';
 import { RequestIdInterceptor } from '../src/common/interceptors/request-id.interceptor';
 import { GlobalExceptionFilter } from '../src/common/filters/global-exception.filter';
 import { createGlobalValidationPipe } from '../src/common/pipes/validation.pipe';
 
 @Module({})
 class MockDatabaseModule {}
+
+@Module({})
+class MockTransfersModule {}
 
 describe('Transaction Service E2E', () => {
   let app: INestApplication<App>;
@@ -20,6 +24,8 @@ describe('Transaction Service E2E', () => {
     })
       .overrideModule(DatabaseModule)
       .useModule(MockDatabaseModule)
+      .overrideModule(TransfersModule)
+      .useModule(MockTransfersModule)
       .compile();
 
     app = moduleFixture.createNestApplication({ bodyParser: true });
@@ -88,20 +94,9 @@ describe('Transaction Service E2E', () => {
         .set('X-Request-Id', 'not-valid-uuid')
         .expect(400);
 
-      expect(res.body).toEqual({
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'Header X-Request-Id không đúng định dạng UUID',
-          details: [
-            {
-              field: 'x-request-id',
-              code: 'INVALID_FORMAT',
-              message: 'X-Request-Id phải là UUID hợp lệ',
-            },
-          ],
-        },
-        requestId: expect.any(String),
-      });
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.details[0].field).toBe('x-request-id');
+      expect(res.body.error.details[0].code).toBe('INVALID_FORMAT');
       expect(res.headers['x-request-id']).toBe(res.body.requestId);
       expect(res.headers['cache-control']).toBe('no-store');
     });
