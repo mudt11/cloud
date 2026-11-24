@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
 import { DatabaseModule } from './database/database.module';
 import { TransfersModule } from './transfers/transfers.module';
+import { RabbitMqModule } from './rabbitmq/rabbitmq.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -17,6 +18,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     HealthModule,
     DatabaseModule,
     TransfersModule,
+    RabbitMqModule,
   ],
   controllers: [AppController],
   providers: [

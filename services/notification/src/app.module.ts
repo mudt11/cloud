@@ -5,6 +5,8 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
 import { DatabaseModule } from './database/database.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { RabbitMqModule } from './rabbitmq/rabbitmq.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 
 @Module({
@@ -15,6 +17,8 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     }),
     HealthModule,
     DatabaseModule,
+    NotificationsModule,
+    RabbitMqModule,
   ],
   controllers: [AppController],
   providers: [
