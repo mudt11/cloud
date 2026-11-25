@@ -1,132 +1,63 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Notification Service (`services/notification`)
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Phụ trách: **Nguyễn Quốc Dương** (Nhóm 6)  
+Hợp đồng áp dụng: **Tài liệu 06 v1.1** (`N01`, `N02`, `H01`, `E01`–`E02`, `C01`–`C05`)
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## 1. Tổng quan & Sở hữu dữ liệu
+- **Cổng mặc định:** `3004` (DNS nội bộ trong Compose/Cloud: `http://notification:3004`).
+- **Database riêng:** `notification_db` (PostgreSQL), bảng `notifications` và `consumer_inbox`.
+- **RabbitMQ Consumer (`E01`/`E02`):**
+  - Exchange: `bank.events.v1` (`topic`, `durable`), routing key `transfer.posted.v1`.
+  - Queue chính: `notification.inbox.v1` (`durable`).
+  - Hàng đợi lỗi (DLQ): `notification.inbox.dlq.v1` (`durable`).
+  - Trong cùng một transaction DB: chèn `consumer_inbox` (`consumer_name`, `event_id`) và 2 bản ghi thông báo (`OUTGOING` cho `fromUserId`, `INCOMING` cho `toUserId`). Lỗi tạm thời retry sau `5, 15, 30, 60, 120s` (tối đa 6 lần) trước khi vào DLQ.
 
-## Description
+## 2. Endpoints
+| Mã | Method & Path | Quyền | Mô tả |
+|---|---|---|---|
+| **N01** | `GET /api/v1/notifications` | `CUSTOMER`, `ADMIN` | Danh sách thông báo của chính `sub` (`page`, `pageSize`, `unreadOnly`), trả `meta.unreadCount` và header `X-Total-Count` |
+| **N02** | `PATCH /api/v1/notifications/:notificationId/read` | `CUSTOMER`, `ADMIN` | Đánh dấu đã đọc (body `{}`), idempotent; không có hoặc ngoài quyền trả `404 RESOURCE_NOT_FOUND` |
+| **H01** | `GET /health/live` | Internal | Liveness probe (HTTP `200`) |
+| **H01** | `GET /health/ready` | Internal | Readiness probe (`200` khi `database=UP`, `broker=UP`, `jwtKeys=UP`; thiếu trả `503`) |
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Swagger OpenAPI UI (môi trường non-production): `/api/docs`.
 
-## Project setup
+## 3. Biến môi trường (`.env.example`)
+Không commit `.env` lên Git.
 
+| Biến | Mặc định local | Giá trị Docker Compose / Cloud |
+|---|---|---|
+| `NODE_ENV` | `development` | `production` |
+| `PORT` | `3004` | `3004` |
+| `SERVICE_NAME` | `notification` | `notification` |
+| `APP_VERSION` | `dev` | Commit SHA ngắn (vd `cb4feba`) |
+| `DATABASE_URL` | `postgresql://notification_user:change_me@localhost:5432/notification_db` | `postgresql://notification_user:<secret>@postgres:5432/notification_db` |
+| `AMQP_URL` | `amqp://guest:guest@localhost:5672` | `amqp://<user>:<pass>@rabbitmq:5672` |
+| `JWT_ISSUER` | `mini-bank-user` | `mini-bank-user` |
+| `JWT_AUDIENCE` | `mini-bank-api` | `mini-bank-api` |
+| `JWT_JWKS_URL` | `http://localhost:3001/api/v1/auth/jwks` | `http://user:3001/api/v1/auth/jwks` |
+| `PUBLIC_ORIGIN` | `http://localhost:8080` | `https://<domain-chinh-thuc>` |
+
+## 4. Build Docker Image & Vận hành (Tuần 6 / Mốc M3)
 ```bash
-$ npm install
+# Build image gắn tag commit SHA
+SHA=$(git rev-parse --short HEAD)
+docker build --build-arg APP_VERSION=$SHA -t mini-bank-notification:$SHA ./services/notification
+
+# Chạy migration trước khi start service
+docker run --rm --env-file .env.notification mini-bank-notification:$SHA node dist/database/migrate.js
+
+# Chạy container service (non-root user 'node', port 3004)
+docker run -d --name notification --env-file .env.notification -p 3004:3004 mini-bank-notification:$SHA
 ```
 
-## Compile and run the project
-
+## 5. Phát triển & Kiểm thử local
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm install
+npm run migrate          # Chạy TypeORM migration lên notification_db
+npm run start:dev        # Chạy dev mode
+npm run build            # Biên dịch TypeScript
+npm run lint             # oxlint --type-aware (0 warnings/errors)
+npm test                 # Unit tests
+npm run test:e2e         # Integration / E2E tests
 ```
-
-## Run tests
-
-```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
-```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Observability
-
-In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.
-
-[NestJS Observe](https://observe.nestjs.com) automatically instruments your NestJS application, giving you deep visibility into your system with minimal setup:
-
-- **Distributed tracing:** Follow requests across services and understand how they flow through your system.
-- **Waterfall analysis:** Visualize request execution and identify slow operations, bottlenecks, and unexpected delays.
-- **Performance analysis:** Analyze application performance in real time and quickly pinpoint areas that need optimization.
-- **Metrics:** Track key application and infrastructure metrics to understand system health and performance trends.
-- **Logging:** Centralize and correlate logs with traces and other telemetry to make debugging easier.
-- **Error tracking:** Detect errors quickly and investigate their root causes with the surrounding context.
-- **SLA monitoring:** Track service-level objectives and identify when your application is approaching or exceeding defined thresholds.
-- **Alarms and alerts:** Set up alerts for critical errors, performance degradation, SLA violations, and other anomalies so your team can react quickly.
-
-To add it to this project, run this and approve the code it prints at [observe.nestjs.com/link](https://observe.nestjs.com/link) - signing up for free if you have no account:
-
-```bash
-$ npx @nestjs/observe link
-```
-
-It installs `@nestjs/observe`, wires it into `AppModule` and `main.ts`, and writes the app key and secret into `.env`, which every `nest start` script (`start`, `start:dev`, `start:debug`) then loads. In production, set `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` in the environment instead.
-
-Or do it by hand:
-
-```bash
-$ npm install @nestjs/observe
-```
-
-Then follow the [setup guide](https://docs.nestjs.com/observability/sdk) - it takes a single import and an app key.
-
-The free plan needs no payment details and covers 300,000 events a month. You can also browse the [live demo](https://www.observe-demo.nestjs.com/dashboard) first - the whole dashboard over a busy service's data, with nothing to install.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Auto-instrument your application with [NestJS Observe](https://observe.nestjs.com). Distributed tracing, metrics, and logging made easy. Error tracking and performance monitoring for your NestJS applications.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).

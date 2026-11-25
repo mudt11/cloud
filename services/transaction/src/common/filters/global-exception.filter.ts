@@ -1,0 +1,165 @@
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
+import { Request, Response } from 'express';
+import { randomUUID } from 'node:crypto';
+import { AppException, ErrorDetail } from '../exceptions/app.exception';
+
+@Catch()
+export class GlobalExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(GlobalExceptionFilter.name);
+
+  catch(exception: unknown, host: ArgumentsHost) {
+    const ctx = host.switchToHttp();
+    const req = ctx.getRequest<Request>();
+    const res = ctx.getResponse<Response>();
+
+    const requestId =
+      req?.requestId ||
+      (typeof req?.headers?.['x-request-id'] === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          req.headers['x-request-id'].trim(),
+        ) &&
+        req.headers['x-request-id'].trim().toLowerCase()) ||
+      randomUUID();
+
+    res.setHeader('X-Request-Id', requestId);
+    if (!res.getHeader('Cache-Control')) {
+      res.setHeader('Cache-Control', 'no-store');
+    }
+
+    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    let code = 'INTERNAL_ERROR';
+    let message = 'Đã có lỗi xảy ra trên hệ thống';
+    let details: ErrorDetail[] = [];
+    const customHeaders: Record<string, string> = {};
+
+    if (exception instanceof AppException) {
+      status = exception.getStatus();
+      code = exception.code;
+      message = exception.message;
+      details = exception.details || [];
+      Object.assign(customHeaders, exception.customHeaders);
+    } else if (exception instanceof HttpException) {
+      status = exception.getStatus();
+      const resObj = exception.getResponse() as any;
+
+      if (typeof resObj === 'object' && resObj !== null) {
+        if (typeof resObj.code === 'string') code = resObj.code;
+        if (resObj.message)
+          message = Array.isArray(resObj.message)
+            ? resObj.message.join('; ')
+            : String(resObj.message);
+        if (Array.isArray(resObj.details)) details = resObj.details;
+      } else if (typeof resObj === 'string') {
+        message = resObj;
+      }
+
+      switch (status) {
+        case HttpStatus.BAD_REQUEST:
+          if (!code || code === 'INTERNAL_ERROR') code = 'VALIDATION_ERROR';
+          break;
+        case HttpStatus.UNAUTHORIZED:
+          code = 'UNAUTHENTICATED';
+          customHeaders['WWW-Authenticate'] = 'Bearer';
+          break;
+        case HttpStatus.FORBIDDEN:
+          code = 'FORBIDDEN';
+          break;
+        case HttpStatus.NOT_FOUND:
+          if (!code || code === 'INTERNAL_ERROR') code = 'RESOURCE_NOT_FOUND';
+          break;
+        case HttpStatus.METHOD_NOT_ALLOWED:
+          code = 'METHOD_NOT_ALLOWED';
+          break;
+        case HttpStatus.CONFLICT:
+          if (!code || code === 'INTERNAL_ERROR') code = 'IDEMPOTENCY_CONFLICT';
+          break;
+        case HttpStatus.PAYLOAD_TOO_LARGE:
+          code = 'PAYLOAD_TOO_LARGE';
+          message = 'Kích thước dữ liệu vượt quá giới hạn 16 KiB';
+          break;
+        case HttpStatus.UNSUPPORTED_MEDIA_TYPE:
+          code = 'UNSUPPORTED_MEDIA_TYPE';
+          message = 'Content-Type phải là application/json';
+          break;
+        case HttpStatus.TOO_MANY_REQUESTS:
+          code = 'RATE_LIMITED';
+          if (!customHeaders['Retry-After']) {
+            customHeaders['Retry-After'] = '1';
+          }
+          break;
+        case HttpStatus.SERVICE_UNAVAILABLE:
+          code = 'SERVICE_UNAVAILABLE';
+          if (!customHeaders['Retry-After']) {
+            customHeaders['Retry-After'] = '5';
+          }
+          break;
+        default:
+          if (status >= 500) {
+            code = 'INTERNAL_ERROR';
+            message = 'Đã có lỗi xảy ra trên hệ thống';
+          }
+      }
+    } else {
+      const err = exception as any;
+      if (err?.type === 'entity.too.large' || err?.status === 413) {
+        status = HttpStatus.PAYLOAD_TOO_LARGE;
+        code = 'PAYLOAD_TOO_LARGE';
+        message = 'Kích thước dữ liệu vượt quá giới hạn 16 KiB';
+      } else if (err instanceof SyntaxError && 'body' in err) {
+        status = HttpStatus.BAD_REQUEST;
+        code = 'VALIDATION_ERROR';
+        message = 'Dữ liệu JSON không đúng cú pháp';
+      } else {
+        status = HttpStatus.INTERNAL_SERVER_ERROR;
+        code = 'INTERNAL_ERROR';
+        message = 'Đã có lỗi xảy ra trên hệ thống';
+        this.logger.error(
+          `[${requestId}] Unhandled Exception: ${err?.message || exception}`,
+          err?.stack,
+        );
+      }
+    }
+
+    for (const [k, v] of Object.entries(customHeaders)) {
+      res.setHeader(k, v);
+    }
+
+    if (
+      status < 500 &&
+      process.env.NODE_ENV !== 'test' &&
+      !process.env.JEST_WORKER_ID &&
+      req?.url
+    ) {
+      console.log(
+        JSON.stringify({
+          level: 'warn',
+          timestamp: new Date().toISOString(),
+          service: process.env.SERVICE_NAME || 'transaction',
+          version: process.env.APP_VERSION || 'dev',
+          requestId,
+          method: req.method,
+          path: req.originalUrl || req.url,
+          statusCode: status,
+          errorCode: code,
+          ...(req.transferId ? { transferId: req.transferId } : {}),
+        }),
+      );
+    }
+
+    res.status(status).json({
+      error: {
+        code,
+        message,
+        details,
+      },
+      requestId,
+    });
+  }
+}
