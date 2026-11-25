@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
@@ -15,6 +16,13 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
       isGlobal: true,
       envFilePath: ['.env', '.env.local'],
     }),
+    // Rate limiting: 60 requests / 60 seconds per IP (Tuần 5)
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000, // 60 seconds (ms)
+        limit: 60,   // 60 requests per window
+      },
+    ]),
     HealthModule,
     DatabaseModule,
     TransfersModule,
@@ -26,6 +34,10 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
     },
   ],
 })

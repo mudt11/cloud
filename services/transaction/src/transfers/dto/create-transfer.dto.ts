@@ -1,28 +1,53 @@
-import { IsNotEmpty, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsUUID,
+  IsString,
+  Matches,
+  IsNotEmpty,
+  MaxLength,
+  IsOptional,
+} from 'class-validator';
 
-/**
- * T01 - Request body theo Tài liệu 06 C03
- * amount: chuỗi biểu diễn số nguyên dương VND (1 đến 1_000_000_000)
- */
 export class CreateTransferDto {
-  @IsNotEmpty({ message: 'fromAccountId là bắt buộc' })
+  @ApiProperty({
+    description: 'UUID tài khoản nguồn của người dùng',
+    example: '11111111-1111-4111-8111-111111111111',
+    format: 'uuid',
+  })
   @IsUUID('4', { message: 'fromAccountId phải là UUID v4 hợp lệ' })
   fromAccountId: string;
 
-  @IsNotEmpty({ message: 'toAccountNumber là bắt buộc' })
+  @ApiProperty({
+    description: 'Số tài khoản đích (10 chữ số)',
+    example: '0987654321',
+    pattern: '^[0-9]{10}$',
+  })
   @IsString()
-  @Matches(/^\d{10}$/, { message: 'toAccountNumber phải đúng 10 chữ số' })
+  @Matches(/^[0-9]{10}$/, {
+    message: 'toAccountNumber phải gồm đúng 10 chữ số',
+  })
   toAccountNumber: string;
 
-  @IsNotEmpty({ message: 'amount là bắt buộc' })
+  @ApiProperty({
+    description: 'Số tiền chuyển (VND, chuỗi số nguyên, 1 – 1,000,000,000)',
+    example: '500000',
+    type: 'string',
+  })
   @IsString()
-  @Matches(/^[1-9]\d{0,9}$/, {
+  @IsNotEmpty()
+  @Matches(/^[1-9][0-9]{0,9}$/, {
     message:
-      'amount phải là chuỗi số nguyên dương VND, tối thiểu 1 và tối đa 1000000000',
+      'amount phải là chuỗi số nguyên dương từ 1 đến 1,000,000,000',
   })
   amount: string;
 
+  @ApiPropertyOptional({
+    description: 'Nội dung chuyển khoản (tối đa 140 ký tự)',
+    example: 'Thanh toán tiền thuê tháng 11',
+    maxLength: 140,
+  })
+  @IsOptional()
   @IsString()
-  @MaxLength(140, { message: 'description tối đa 140 ký tự' })
-  description: string = '';
+  @MaxLength(140, { message: 'description không được vượt quá 140 ký tự' })
+  description?: string;
 }

@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { json, urlencoded } from 'express';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { createGlobalValidationPipe } from './common/pipes/validation.pipe';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
@@ -24,12 +25,43 @@ async function bootstrap() {
   // 4. Global ValidationPipe (C03)
   app.useGlobalPipes(createGlobalValidationPipe());
 
-  // CORS
+  // 5. CORS
   const publicOrigin = process.env.PUBLIC_ORIGIN || 'http://localhost:8080';
   app.enableCors({
     origin: publicOrigin,
     credentials: true,
+    exposedHeaders: [
+      'X-Request-Id',
+      'Idempotency-Replayed',
+      'Location',
+      'Retry-After',
+      'X-Total-Count',
+    ],
   });
+
+  // 6. Swagger / OpenAPI (Tuần 5)
+  if (process.env.NODE_ENV !== 'production') {
+    const config = new DocumentBuilder()
+      .setTitle('Transaction Service API')
+      .setDescription(
+        'Mini-Bank Transaction Service — chuyển tiền nội địa (VND)\n\n' +
+          '**Hợp đồng chính:** T01 (tạo lệnh chuyển tiền), T03 (tra cứu giao dịch)\n\n' +
+          '**Xác thực:** Bearer JWT RS256 (JWKS tại /api/v1/auth/jwks của User Service)\n\n' +
+          '**Idempotency:** Mọi POST /transfers yêu cầu header `Idempotency-Key` (UUID v4)',
+      )
+      .setVersion('1.0.0')
+      .addBearerAuth(
+        { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+        'JWT',
+      )
+      .addServer(`http://localhost:${process.env.PORT ?? 3003}`)
+      .build();
+
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup('api/docs', app, document, {
+      swaggerOptions: { persistAuthorization: true },
+    });
+  }
 
   const port = process.env.PORT ?? 3003;
   await app.listen(port);

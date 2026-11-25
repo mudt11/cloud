@@ -9,12 +9,23 @@ import {
   HttpStatus,
   ParseUUIDPipe,
 } from '@nestjs/common';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiHeader,
+  ApiBearerAuth,
+  ApiParam,
+} from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { TransferService } from './transfer.service';
 import { CreateTransferDto } from './dto/create-transfer.dto';
+import { TransferResponseDto } from './dto/transfer-response.dto';
 import { AuthenticatedUser } from '../common/guards/jwt-auth.guard';
 import { ValidationException } from '../common/exceptions/app.exception';
 
+@ApiTags('Transfers')
+@ApiBearerAuth('JWT')
 @Controller('transfers')
 export class TransferController {
   constructor(private readonly transferService: TransferService) {}
@@ -25,6 +36,43 @@ export class TransferController {
    * Response: 201 Created (mới), 200 OK (replayed), 202 Accepted (pending)
    */
   @Post()
+  @ApiOperation({
+    summary: 'T01 — Tạo lệnh chuyển tiền',
+    description:
+      'Tạo lệnh chuyển tiền với Idempotency Key.\n\n' +
+      '- **201 Created**: Lệnh mới được xử lý thành công\n' +
+      '- **200 OK**: Idempotency replay (cùng key, cùng body)\n' +
+      '- **202 Accepted**: Đang chờ Account Service xác nhận (PENDING)',
+  })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    description: 'UUID v4 để đảm bảo at-most-once processing',
+    required: true,
+    example: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Lệnh mới được tạo thành công',
+    type: TransferResponseDto,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Idempotency replay — lệnh đã tồn tại',
+    headers: { 'Idempotency-Replayed': { description: 'true', schema: { type: 'string' } } },
+  })
+  @ApiResponse({
+    status: 202,
+    description: 'PENDING — đang chờ Account Service',
+    headers: {
+      Location: { description: 'URL poll trạng thái', schema: { type: 'string' } },
+      'Retry-After': { description: '2', schema: { type: 'string' } },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'VALIDATION_ERROR — body hoặc header không hợp lệ' })
+  @ApiResponse({ status: 401, description: 'UNAUTHENTICATED — JWT không hợp lệ hoặc hết hạn' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN — không sở hữu tài khoản nguồn' })
+  @ApiResponse({ status: 404, description: 'NOT_FOUND — tài khoản không tồn tại' })
+  @ApiResponse({ status: 409, description: 'IDEMPOTENCY_CONFLICT — cùng key, khác body' })
   async createTransfer(
     @Body() dto: CreateTransferDto,
     @Req() req: Request,
@@ -114,6 +162,17 @@ export class TransferController {
    * ADMIN: xem tất cả
    */
   @Get(':transferId')
+  @ApiOperation({
+    summary: 'T03 — Tra cứu chi tiết giao dịch',
+    description:
+      'CUSTOMER chỉ xem được lệnh mình tạo hoặc lệnh SUCCEEDED mình nhận.\n' +
+      'ADMIN xem được tất cả.',
+  })
+  @ApiParam({ name: 'transferId', description: 'UUID của transfer', format: 'uuid' })
+  @ApiResponse({ status: 200, description: 'Chi tiết giao dịch', type: TransferResponseDto })
+  @ApiResponse({ status: 401, description: 'UNAUTHENTICATED' })
+  @ApiResponse({ status: 403, description: 'FORBIDDEN — không có quyền xem giao dịch này' })
+  @ApiResponse({ status: 404, description: 'TRANSFER_NOT_FOUND' })
   async getTransfer(
     @Param('transferId', new ParseUUIDPipe({ version: '4' }))
     transferId: string,
