@@ -1,14 +1,17 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
 import { DatabaseModule } from './database/database.module';
 import { TransfersModule } from './transfers/transfers.module';
+import { ReportsModule } from './reports/reports.module';
 import { RabbitMqModule } from './rabbitmq/rabbitmq.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
+import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
 
 @Module({
   imports: [
@@ -16,16 +19,19 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
       isGlobal: true,
       envFilePath: ['.env', '.env.local'],
     }),
-    // Rate limiting: 60 requests / 60 seconds per IP (Tuần 5)
+    // Giới hạn mặc định cho API xác thực theo C04: 120 request / 60s theo sub
+    // T01 override 30/60s; T05 override 5/60s; Health dùng @SkipThrottle()
     ThrottlerModule.forRoot([
       {
-        ttl: 60_000, // 60 seconds (ms)
-        limit: 60,   // 60 requests per window
+        name: 'default',
+        ttl: 60_000,
+        limit: 120,
       },
     ]),
     HealthModule,
     DatabaseModule,
     TransfersModule,
+    ReportsModule,
     RabbitMqModule,
   ],
   controllers: [AppController],
@@ -37,7 +43,11 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
     },
     {
       provide: APP_GUARD,
-      useClass: ThrottlerGuard,
+      useClass: RolesGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: UserThrottlerGuard,
     },
   ],
 })

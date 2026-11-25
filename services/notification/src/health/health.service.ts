@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Client } from 'pg';
 import * as amqp from 'amqplib';
+import { RabbitMqService } from '../rabbitmq/rabbitmq.service';
 
 export interface NotificationReadyCheckResult {
   service: string;
@@ -19,7 +20,10 @@ export interface NotificationReadyCheckResult {
 export class HealthService {
   private readonly logger = new Logger(HealthService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    @Optional() private readonly rabbitMqService?: RabbitMqService,
+  ) {}
 
   getServiceName(): string {
     return this.configService.get<string>('SERVICE_NAME') || 'notification';
@@ -53,6 +57,11 @@ export class HealthService {
   }
 
   async checkBroker(): Promise<'UP' | 'DOWN'> {
+    // Ưu tiên kiểm tra kết nối đang sống của consumer trong tiến trình (H01)
+    if (this.rabbitMqService?.isConnected()) {
+      return 'UP';
+    }
+
     const amqpUrl =
       this.configService.get<string>('AMQP_URL') ||
       'amqp://guest:guest@localhost:5672';

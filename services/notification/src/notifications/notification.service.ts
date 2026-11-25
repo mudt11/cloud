@@ -4,13 +4,10 @@ import { Repository } from 'typeorm';
 import { NotificationEntity } from './entities/notification.entity';
 import {
   NotificationResponseDto,
-  NotificationListResponseDto,
+  NotificationListResultDto,
 } from './dto/notification-response.dto';
 import { ListNotificationsQueryDto } from './dto/list-notifications-query.dto';
-import {
-  ResourceNotFoundException,
-  ForbiddenException,
-} from '../common/exceptions/app.exception';
+import { ResourceNotFoundException } from '../common/exceptions/app.exception';
 import { AuthenticatedUser } from '../common/guards/jwt-auth.guard';
 
 @Injectable()
@@ -25,63 +22,70 @@ export class NotificationService {
   private toDto(entity: NotificationEntity): NotificationResponseDto {
     return {
       id: entity.id,
-      eventId: entity.eventId,
-      recipientUserId: entity.recipientUserId,
-      type: entity.type,
       transferId: entity.transferId,
+      type: entity.type,
       direction: entity.direction,
       amount: entity.amount,
       currency: entity.currency,
       message: entity.message,
       createdAt: entity.createdAt.toISOString(),
       readAt: entity.readAt ? entity.readAt.toISOString() : null,
-      isRead: entity.readAt !== null,
     };
   }
 
   /**
    * N01 — GET /api/v1/notifications
-   * Danh sách thông báo của user hiện tại, phân trang, có unreadCount.
+   * Danh sách thông báo của chính sub, sort createdAt DESC, id DESC,
+   * trả meta phân trang C05 + unreadCount toàn hộp thư.
    */
   async findAll(
     user: AuthenticatedUser,
     query: ListNotificationsQueryDto,
-  ): Promise<NotificationListResponseDto> {
+  ): Promise<NotificationListResultDto> {
     const page = query.page ?? 1;
-    const limit = query.limit ?? 20;
+    const pageSize = query.pageSize ?? 20;
     const unreadOnly = query.unreadOnly === 'true';
-    const skip = (page - 1) * limit;
+    const skip = (page - 1) * pageSize;
 
     const qb = this.notificationRepo
       .createQueryBuilder('n')
       .where('n.recipient_user_id = :userId', { userId: user.sub })
-      .orderBy('n.created_at', 'DESC');
+      .orderBy('n.created_at', 'DESC')
+      .addOrderBy('n.id', 'DESC');
 
     if (unreadOnly) {
       qb.andWhere('n.read_at IS NULL');
     }
 
-    const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
+    const [items, totalItems] = await qb
+      .skip(skip)
+      .take(pageSize)
+      .getManyAndCount();
 
-    // Đếm unread riêng (luôn theo toàn bộ, không phụ thuộc filter)
     const unreadCount = await this.notificationRepo
       .createQueryBuilder('n')
       .where('n.recipient_user_id = :userId', { userId: user.sub })
       .andWhere('n.read_at IS NULL')
       .getCount();
 
+    const totalPages =
+      totalItems === 0 ? 0 : Math.ceil(totalItems / pageSize);
+
     return {
       items: items.map((item) => this.toDto(item)),
-      total,
-      page,
-      limit,
-      unreadCount,
+      meta: {
+        page,
+        pageSize,
+        totalItems,
+        totalPages,
+        unreadCount,
+      },
     };
   }
 
   /**
-   * N02 — PATCH /api/v1/notifications/:id/read
-   * Đánh dấu đã đọc. Chỉ chủ sở hữu mới được đánh dấu.
+   * N02 — PATCH /api/v1/notifications/:notificationId/read
+   * Đánh dấu đã đọc (idempotent). Không tồn tại hoặc khác chủ cùng trả 404 RESOURCE_NOT_FOUND.
    */
   async markAsRead(
     notificationId: string,
@@ -91,20 +95,13 @@ export class NotificationService {
       where: { id: notificationId },
     });
 
-    if (!notification) {
+    if (!notification || notification.recipientUserId !== user.sub) {
       throw new ResourceNotFoundException(
         'Thông báo không tồn tại',
-        'NOTIFICATION_NOT_FOUND',
+        'RESOURCE_NOT_FOUND',
       );
     }
 
-    if (notification.recipientUserId !== user.sub) {
-      throw new ForbiddenException(
-        'Bạn không có quyền cập nhật thông báo này',
-      );
-    }
-
-    // Idempotent: đã đọc rồi thì giữ nguyên readAt
     if (!notification.readAt) {
       notification.readAt = new Date();
       await this.notificationRepo.save(notification);

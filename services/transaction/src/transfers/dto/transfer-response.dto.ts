@@ -1,11 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
+/**
+ * Hợp đồng M02 / M03 — Transfer response model
+ */
 export class TransferResponseDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
 
-  @ApiProperty({ enum: ['PENDING', 'SUCCEEDED', 'REJECTED'] })
-  status: string;
+  @ApiProperty({ format: 'uuid' })
+  requesterUserId: string;
 
   @ApiProperty({ format: 'uuid' })
   fromAccountId: string;
@@ -13,21 +16,15 @@ export class TransferResponseDto {
   @ApiProperty({ format: 'uuid' })
   toAccountId: string;
 
-  @ApiProperty({ example: '1234567890' })
+  @ApiProperty({ example: '1000000001' })
   fromAccountNumber: string;
 
-  @ApiProperty({ example: '0987654321' })
+  @ApiProperty({ example: '1000000002' })
   toAccountNumber: string;
-
-  @ApiProperty({ format: 'uuid' })
-  fromUserId: string;
-
-  @ApiProperty({ format: 'uuid' })
-  toUserId: string;
 
   @ApiProperty({
     description: 'Số tiền (VND, dạng chuỗi để tránh mất độ chính xác BIGINT)',
-    example: '500000',
+    example: '100000',
     type: 'string',
   })
   amount: string;
@@ -35,10 +32,13 @@ export class TransferResponseDto {
   @ApiProperty({ example: 'VND' })
   currency: string;
 
-  @ApiProperty({ example: 'Thanh toán tiền thuê' })
+  @ApiProperty({ example: 'Chuyen tien' })
   description: string;
 
-  @ApiPropertyOptional({ example: 'M05', nullable: true })
+  @ApiProperty({ enum: ['PENDING', 'SUCCEEDED', 'REJECTED'] })
+  status: string;
+
+  @ApiPropertyOptional({ example: 'INSUFFICIENT_FUNDS', nullable: true })
   reasonCode: string | null;
 
   @ApiProperty({ format: 'date-time' })

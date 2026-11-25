@@ -59,6 +59,12 @@ export class ValidationException extends AppException {
   }
 }
 
+export class SameAccountException extends AppException {
+  constructor(message = 'Tài khoản nguồn và tài khoản đích không được trùng nhau') {
+    super('SAME_ACCOUNT', message, HttpStatus.BAD_REQUEST);
+  }
+}
+
 export class UnauthenticatedException extends AppException {
   constructor(message = 'Chưa được xác thực hoặc token không hợp lệ') {
     super('UNAUTHENTICATED', message, HttpStatus.UNAUTHORIZED, [], {
@@ -85,6 +91,14 @@ export class ResourceNotFoundException extends AppException {
 export class IdempotencyConflictException extends AppException {
   constructor(message = 'Yêu cầu xung đột với khóa idempotency đã tồn tại') {
     super('IDEMPOTENCY_CONFLICT', message, HttpStatus.CONFLICT);
+  }
+}
+
+export class ExportTooLargeException extends AppException {
+  constructor(
+    message = 'Số lượng giao dịch vượt quá giới hạn 10.000 dòng cho một lần xuất',
+  ) {
+    super('EXPORT_TOO_LARGE', message, HttpStatus.CONFLICT);
   }
 }
 

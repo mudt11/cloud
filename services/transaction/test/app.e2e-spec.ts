@@ -5,6 +5,7 @@ import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { DatabaseModule } from '../src/database/database.module';
 import { TransfersModule } from '../src/transfers/transfers.module';
+import { ReportsModule } from '../src/reports/reports.module';
 import { RabbitMqModule } from '../src/rabbitmq/rabbitmq.module';
 import { RequestIdInterceptor } from '../src/common/interceptors/request-id.interceptor';
 import { GlobalExceptionFilter } from '../src/common/filters/global-exception.filter';
@@ -15,6 +16,9 @@ class MockDatabaseModule {}
 
 @Module({})
 class MockTransfersModule {}
+
+@Module({})
+class MockReportsModule {}
 
 @Module({})
 class MockRabbitMqModule {}
@@ -30,6 +34,8 @@ describe('Transaction Service E2E', () => {
       .useModule(MockDatabaseModule)
       .overrideModule(TransfersModule)
       .useModule(MockTransfersModule)
+      .overrideModule(ReportsModule)
+      .useModule(MockReportsModule)
       .overrideModule(RabbitMqModule)
       .useModule(MockRabbitMqModule)
       .compile();

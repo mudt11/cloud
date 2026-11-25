@@ -5,9 +5,13 @@ import { AppModule } from './app.module';
 import { createGlobalValidationPipe } from './common/pipes/validation.pipe';
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { RequestIdInterceptor } from './common/interceptors/request-id.interceptor';
+import { contentTypeJsonMiddleware } from './common/middleware/content-type.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+
+  // 0. Kiểm tra Content-Type cho request có body (C02, 415 UNSUPPORTED_MEDIA_TYPE)
+  app.use(contentTypeJsonMiddleware);
 
   // 1. Giới hạn body 16 KiB (413 PAYLOAD_TOO_LARGE khi vượt quá)
   app.use(json({ limit: '16kb' }));
@@ -39,17 +43,17 @@ async function bootstrap() {
     ],
   });
 
-  // 6. Swagger / OpenAPI (Tuần 5)
+  // 6. Swagger / OpenAPI (tắt trong production)
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()
       .setTitle('Transaction Service API')
       .setDescription(
-        'Mini-Bank Transaction Service — chuyển tiền nội địa (VND)\n\n' +
-          '**Hợp đồng chính:** T01 (tạo lệnh chuyển tiền), T03 (tra cứu giao dịch)\n\n' +
+        'Mini-Bank Transaction Service — chuyển tiền nội địa (VND), lịch sử & báo cáo\n\n' +
+          '**Hợp đồng chính:** T01 (POST /transfers), T02 (GET /transfers), T03 (GET /transfers/:id), T04 (GET /reports/summary), T05 (GET /reports/export)\n\n' +
           '**Xác thực:** Bearer JWT RS256 (JWKS tại /api/v1/auth/jwks của User Service)\n\n' +
           '**Idempotency:** Mọi POST /transfers yêu cầu header `Idempotency-Key` (UUID v4)',
       )
-      .setVersion('1.0.0')
+      .setVersion(process.env.APP_VERSION || '1.0.0')
       .addBearerAuth(
         { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
         'JWT',
@@ -63,6 +67,7 @@ async function bootstrap() {
     });
   }
 
+  app.enableShutdownHooks();
   const port = process.env.PORT ?? 3003;
   await app.listen(port);
 }

@@ -1,57 +1,84 @@
 /**
- * Hợp đồng I01: POST /internal/v1/transfer-context
- * Request gửi sang Account Service để xác minh quyền sở hữu và lấy thông tin người nhận
+ * Hợp đồng I01: POST /internal/v1/transfer-context (Tài liệu 06 I01 & I01a)
  */
 export interface TransferContextRequest {
-  fromAccountId: string;
-  toAccountNumber: string;
   requesterUserId: string;
-}
-
-/**
- * Hợp đồng I01: Response từ Account Service
- */
-export interface TransferContextResponse {
   fromAccountId: string;
-  fromAccountNumber: string;
-  fromUserId: string;
-  toAccountId: string;
   toAccountNumber: string;
-  toUserId: string;
+}
+
+export interface AccountRef {
+  id: string;
+  userId: string;
+  accountNumber: string;
+  accountName: string;
+  currency: string;
+  status: 'ACTIVE' | 'FROZEN';
+}
+
+export interface TransferContextResponse {
+  from: AccountRef;
+  to: AccountRef;
 }
 
 /**
- * Hợp đồng I02: POST /internal/v1/postings
- * Request gửi sang Account Service để ghi tiền nguyên tử
+ * Hợp đồng I02: POST /internal/v1/postings (PostingCommand theo Tài liệu 06 I02)
  */
 export interface PostingRequest {
   transferId: string;
+  requesterUserId: string;
   fromAccountId: string;
   toAccountId: string;
   amount: string;
   currency: string;
   description: string;
-  idempotencyKey: string;
 }
 
 /**
- * Hợp đồng I02: Response từ Account Service
- * result: 'APPLIED' | 'REJECTED'
- * reasonCode: mã từ chối (vd: M05 = số dư không đủ)
+ * Hợp đồng M02b / I02 / I03 / I04: PostingReceipt
  */
-export interface PostingResponse {
-  result: 'APPLIED' | 'REJECTED';
-  reasonCode?: string;
-  committedAt?: string;
-}
-
-/**
- * Hợp đồng I03: GET /internal/v1/postings/{transferId}
- * Polling trạng thái sau timeout
- */
-export interface PostingStatusResponse {
+export interface PostingReceipt {
   transferId: string;
-  result: 'APPLIED' | 'REJECTED' | 'PENDING';
-  reasonCode?: string;
-  committedAt?: string;
+  requesterUserId: string;
+  fromAccountId: string;
+  toAccountId: string;
+  fromUserId: string | null;
+  toUserId: string | null;
+  fromAccountNumber: string | null;
+  toAccountNumber: string | null;
+  amount: string;
+  currency: string;
+  description: string;
+  status: 'APPLIED' | 'REJECTED';
+  reasonCode: string | null;
+  decidedAt: string;
+  committedAt: string | null;
+  eventId: string | null;
+}
+
+/**
+ * Hợp đồng I04: GET /internal/v1/postings?limit=...&cursor=...
+ */
+export interface ListPostingsResponse {
+  items: PostingReceipt[];
+  meta: {
+    limit: number;
+    nextCursor: string | null;
+    hasMore: boolean;
+  };
+}
+
+/**
+ * Hợp đồng M01 / A02 / A05: Account
+ */
+export interface AccountInfo {
+  id: string;
+  userId: string;
+  accountNumber: string;
+  accountName: string;
+  currency: string;
+  balance: string;
+  status: 'ACTIVE' | 'FROZEN';
+  createdAt: string;
+  updatedAt: string;
 }

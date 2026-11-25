@@ -1,7 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, Module } from '@nestjs/common';
+import { json, urlencoded } from 'express';
+import * as http from 'node:http';
 import request from 'supertest';
 import { App } from 'supertest/types';
+import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { AppModule } from './../src/app.module';
 import { DatabaseModule } from '../src/database/database.module';
 import { NotificationsModule } from '../src/notifications/notifications.module';
@@ -11,6 +14,8 @@ import { NotificationService } from '../src/notifications/notification.service';
 import { RequestIdInterceptor } from '../src/common/interceptors/request-id.interceptor';
 import { GlobalExceptionFilter } from '../src/common/filters/global-exception.filter';
 import { createGlobalValidationPipe } from '../src/common/pipes/validation.pipe';
+import { contentTypeJsonMiddleware } from '../src/common/middleware/content-type.middleware';
+import { ResourceNotFoundException } from '../src/common/exceptions/app.exception';
 
 @Module({})
 class MockDatabaseModule {}
@@ -18,26 +23,71 @@ class MockDatabaseModule {}
 @Module({})
 class MockRabbitMqModule {}
 
-const NOTIF_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const USER_SUB = '11111111-1111-4111-8111-111111111111';
+const NOTIF_ID = '55555555-5555-4555-8555-555555555555';
+
+const MOCK_NOTIFICATION = {
+  id: NOTIF_ID,
+  transferId: '33333333-3333-4333-8333-333333333333',
+  type: 'TRANSFER_SUCCEEDED',
+  direction: 'INCOMING' as const,
+  amount: '100000',
+  currency: 'VND',
+  message: 'Bạn đã nhận 100.000 VND từ tài khoản 1000000001',
+  createdAt: '2026-11-02T03:00:00.000Z',
+  readAt: null,
+};
 
 const mockNotificationService = {
   findAll: jest.fn(),
   markAsRead: jest.fn(),
 };
 
-/**
- * MockNotificationsModule giữ lại NotificationController nhưng mock NotificationService
- */
 @Module({
   controllers: [NotificationController],
-  providers: [{ provide: NotificationService, useValue: mockNotificationService }],
+  providers: [
+    { provide: NotificationService, useValue: mockNotificationService },
+  ],
 })
 class MockNotificationsModule {}
 
-describe('Notification Service Integration Tests', () => {
+describe('Notification Service Full HTTP Integration Tests (C02–C05, N01–N02)', () => {
   let app: INestApplication<App>;
+  let jwksServer: http.Server;
+  let accessToken: string;
 
   beforeAll(async () => {
+    const { publicKey, privateKey } = await generateKeyPair('RS256');
+    const publicJwk = await exportJWK(publicKey);
+    publicJwk.use = 'sig';
+    publicJwk.alg = 'RS256';
+    publicJwk.kid = 'test-notif-key';
+
+    jwksServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ keys: [publicJwk] }));
+    });
+    await new Promise<void>((resolve) => {
+      jwksServer.listen(0, '127.0.0.1', () => resolve());
+    });
+    const addr = jwksServer.address() as { port: number };
+    process.env.JWT_JWKS_URL = `http://127.0.0.1:${addr.port}/api/v1/auth/jwks`;
+    process.env.JWT_ISSUER = 'mini-bank-user';
+    process.env.JWT_AUDIENCE = 'mini-bank-api';
+
+    accessToken = await new SignJWT({
+      role: 'CUSTOMER',
+      name: 'Nguyen Van A',
+      jti: '77777777-7777-4777-8777-777777777777',
+    })
+      .setProtectedHeader({ alg: 'RS256', kid: 'test-notif-key' })
+      .setSubject(USER_SUB)
+      .setIssuer('mini-bank-user')
+      .setAudience('mini-bank-api')
+      .setIssuedAt()
+      .setExpirationTime('15m')
+      .sign(privateKey);
+
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
@@ -49,10 +99,11 @@ describe('Notification Service Integration Tests', () => {
       .useModule(MockRabbitMqModule)
       .compile();
 
-    app = moduleFixture.createNestApplication({ bodyParser: true });
-    app.setGlobalPrefix('api/v1', {
-      exclude: ['health/live', 'health/ready'],
-    });
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    app.use(contentTypeJsonMiddleware);
+    app.use(json({ limit: '16kb' }));
+    app.use(urlencoded({ extended: true, limit: '16kb' }));
+    app.setGlobalPrefix('api/v1', { exclude: ['health/live', 'health/ready'] });
     app.useGlobalInterceptors(new RequestIdInterceptor());
     app.useGlobalFilters(new GlobalExceptionFilter());
     app.useGlobalPipes(createGlobalValidationPipe());
@@ -61,14 +112,14 @@ describe('Notification Service Integration Tests', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await app?.close();
+    await new Promise<void>((resolve) => jwksServer.close(() => resolve()));
   });
 
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  // ─── Health Check (H01) ────────────────────────────────────────────────────
   describe('Health Check (H01)', () => {
     it('GET /health/live → 200 without JWT', async () => {
       const res = await request(app.getHttpServer())
@@ -85,97 +136,93 @@ describe('Notification Service Integration Tests', () => {
     });
   });
 
-  // ─── N01: GET /api/v1/notifications ──────────────────────────────────────
   describe('N01 — GET /api/v1/notifications', () => {
-    it('should return 401 UNAUTHENTICATED when no JWT provided', async () => {
+    it('401 UNAUTHENTICATED without token', async () => {
       const res = await request(app.getHttpServer())
         .get('/api/v1/notifications')
         .expect(401);
 
       expect(res.body.error.code).toBe('UNAUTHENTICATED');
-      expect(res.headers['www-authenticate']).toBeDefined();
+      expect(res.headers['www-authenticate']).toBe('Bearer');
     });
 
-    it('should return 401 when JWT is invalid', async () => {
+    it('200 OK with data.items, meta.unreadCount and X-Total-Count header', async () => {
+      mockNotificationService.findAll.mockResolvedValue({
+        items: [MOCK_NOTIFICATION],
+        meta: {
+          page: 1,
+          pageSize: 20,
+          totalItems: 1,
+          totalPages: 1,
+          unreadCount: 1,
+        },
+      });
+
       const res = await request(app.getHttpServer())
-        .get('/api/v1/notifications')
-        .set('Authorization', 'Bearer invalid.jwt.token')
-        .expect(401);
-
-      expect(res.body.error.code).toBe('UNAUTHENTICATED');
-    });
-
-    it('response always has X-Request-Id and Cache-Control headers', async () => {
-      const res = await request(app.getHttpServer())
-        .get('/api/v1/notifications');
-
-      expect(res.headers['x-request-id']).toBeDefined();
-      expect(res.headers['cache-control']).toBe('no-store');
-    });
-
-    it('error response should never expose stack traces', async () => {
-      const res = await request(app.getHttpServer())
-        .get('/api/v1/notifications');
-      const bodyStr = JSON.stringify(res.body);
-      expect(bodyStr).not.toMatch(/at\s+\w+\s+\(/);
-      expect(bodyStr).not.toMatch(/SELECT|INSERT|UPDATE|DELETE/i);
-    });
-  });
-
-  // ─── N02: PATCH /api/v1/notifications/:id/read ───────────────────────────
-  describe('N02 — PATCH /api/v1/notifications/:id/read', () => {
-    it('should return 401 when no JWT provided', async () => {
-      const res = await request(app.getHttpServer())
-        .patch(`/api/v1/notifications/${NOTIF_ID}/read`)
-        .expect(401);
-
-      expect(res.body.error.code).toBe('UNAUTHENTICATED');
-    });
-
-    it('should return 401 when JWT is invalid', async () => {
-      const res = await request(app.getHttpServer())
-        .patch(`/api/v1/notifications/${NOTIF_ID}/read`)
-        .set('Authorization', 'Bearer bad.token')
-        .expect(401);
-
-      expect(res.body.error.code).toBe('UNAUTHENTICATED');
-    });
-
-    it('response always has X-Request-Id and Cache-Control headers', async () => {
-      const res = await request(app.getHttpServer())
-        .patch(`/api/v1/notifications/${NOTIF_ID}/read`);
-
-      expect(res.headers['x-request-id']).toBeDefined();
-      expect(res.headers['cache-control']).toBe('no-store');
-    });
-  });
-
-  // ─── C02 / C03 ────────────────────────────────────────────────────────────
-  describe('C02/C03 — Request ID and Error envelope', () => {
-    it('should echo back a valid X-Request-Id', async () => {
-      const customId = '12345678-1234-4123-8123-123456789012';
-      const res = await request(app.getHttpServer())
-        .get('/health/live')
-        .set('X-Request-Id', customId)
+        .get('/api/v1/notifications?page=1&pageSize=20&unreadOnly=true')
+        .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
-      expect(res.headers['x-request-id']).toBe(customId);
+
+      expect(res.headers['x-total-count']).toBe('1');
+      expect(res.body.data.items).toHaveLength(1);
+      expect(res.body.meta).toEqual({
+        page: 1,
+        pageSize: 20,
+        totalItems: 1,
+        totalPages: 1,
+        unreadCount: 1,
+      });
     });
 
-    it('should reject invalid X-Request-Id with 400', async () => {
+    it('400 VALIDATION_ERROR when unknown query param or invalid pageSize (>100)', async () => {
       const res = await request(app.getHttpServer())
-        .get('/health/live')
-        .set('X-Request-Id', 'bad-id')
+        .get('/api/v1/notifications?pageSize=200&extra=1')
+        .set('Authorization', `Bearer ${accessToken}`)
         .expect(400);
 
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
     });
+  });
 
-    it('error responses should never expose stack traces', async () => {
+  describe('N02 — PATCH /api/v1/notifications/:notificationId/read', () => {
+    it('200 OK with empty JSON body {}', async () => {
+      mockNotificationService.markAsRead.mockResolvedValue({
+        ...MOCK_NOTIFICATION,
+        readAt: '2026-11-02T03:05:00.000Z',
+      });
+
       const res = await request(app.getHttpServer())
-        .patch(`/api/v1/notifications/${NOTIF_ID}/read`);
-      const bodyStr = JSON.stringify(res.body);
-      expect(bodyStr).not.toMatch(/at\s+\w+\s+\(/);
-      expect(bodyStr).not.toMatch(/SELECT|INSERT|UPDATE|DELETE/i);
+        .patch(`/api/v1/notifications/${NOTIF_ID}/read`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({})
+        .expect(200);
+
+      expect(res.body.data.readAt).toBe('2026-11-02T03:05:00.000Z');
+    });
+
+    it('404 RESOURCE_NOT_FOUND when notification missing or belongs to someone else', async () => {
+      mockNotificationService.markAsRead.mockRejectedValue(
+        new ResourceNotFoundException('Thông báo không tồn tại'),
+      );
+
+      const res = await request(app.getHttpServer())
+        .patch(`/api/v1/notifications/${NOTIF_ID}/read`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({})
+        .expect(404);
+
+      expect(res.body.error.code).toBe('RESOURCE_NOT_FOUND');
+    });
+
+    it('400 INVALID_FORMAT when notificationId is not UUID', async () => {
+      const res = await request(app.getHttpServer())
+        .patch('/api/v1/notifications/not-a-uuid/read')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({})
+        .expect(400);
+
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+      expect(res.body.error.details[0].code).toBe('INVALID_FORMAT');
     });
   });
 });

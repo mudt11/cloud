@@ -22,7 +22,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const requestId =
       req?.requestId ||
       (typeof req?.headers?.['x-request-id'] === 'string' &&
-        req.headers['x-request-id']) ||
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          req.headers['x-request-id'].trim(),
+        ) &&
+        req.headers['x-request-id'].trim().toLowerCase()) ||
       randomUUID();
 
     res.setHeader('X-Request-Id', requestId);
@@ -47,11 +50,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       const resObj = exception.getResponse() as any;
 
       if (typeof resObj === 'object' && resObj !== null) {
-        if (resObj.code) code = resObj.code;
+        if (typeof resObj.code === 'string') code = resObj.code;
         if (resObj.message)
           message = Array.isArray(resObj.message)
             ? resObj.message.join('; ')
-            : resObj.message;
+            : String(resObj.message);
         if (Array.isArray(resObj.details)) details = resObj.details;
       } else if (typeof resObj === 'string') {
         message = resObj;
@@ -71,6 +74,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         case HttpStatus.NOT_FOUND:
           if (!code || code === 'INTERNAL_ERROR') code = 'RESOURCE_NOT_FOUND';
           break;
+        case HttpStatus.METHOD_NOT_ALLOWED:
+          code = 'METHOD_NOT_ALLOWED';
+          break;
         case HttpStatus.CONFLICT:
           if (!code || code === 'INTERNAL_ERROR') code = 'IDEMPOTENCY_CONFLICT';
           break;
@@ -84,6 +90,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           break;
         case HttpStatus.TOO_MANY_REQUESTS:
           code = 'RATE_LIMITED';
+          if (!customHeaders['Retry-After']) {
+            customHeaders['Retry-After'] = '1';
+          }
           break;
         case HttpStatus.SERVICE_UNAVAILABLE:
           code = 'SERVICE_UNAVAILABLE';
@@ -98,7 +107,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           }
       }
     } else {
-      // Unhandled / raw errors
       const err = exception as any;
       if (err?.type === 'entity.too.large' || err?.status === 413) {
         status = HttpStatus.PAYLOAD_TOO_LARGE;
@@ -112,7 +120,6 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         status = HttpStatus.INTERNAL_SERVER_ERROR;
         code = 'INTERNAL_ERROR';
         message = 'Đã có lỗi xảy ra trên hệ thống';
-        // Never output stack traces or SQL to response, only log server-side
         this.logger.error(
           `[${requestId}] Unhandled Exception: ${err?.message || exception}`,
           err?.stack,
@@ -122,6 +129,27 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     for (const [k, v] of Object.entries(customHeaders)) {
       res.setHeader(k, v);
+    }
+
+    if (
+      status < 500 &&
+      process.env.NODE_ENV !== 'test' &&
+      !process.env.JEST_WORKER_ID &&
+      req?.url
+    ) {
+      console.log(
+        JSON.stringify({
+          level: 'warn',
+          timestamp: new Date().toISOString(),
+          service: process.env.SERVICE_NAME || 'notification',
+          version: process.env.APP_VERSION || 'dev',
+          requestId,
+          method: req.method,
+          path: req.originalUrl || req.url,
+          statusCode: status,
+          errorCode: code,
+        }),
+      );
     }
 
     res.status(status).json({
